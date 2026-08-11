@@ -339,7 +339,9 @@ def load_state(path: Path):
 
 def save_state(path: Path, state):
     tmp = path.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8") as f: json.dump(state, f)
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, sort_keys=True)
+        f.write("\n")
     tmp.replace(path)
 
 
