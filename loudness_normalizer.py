@@ -27,7 +27,7 @@ STATE_FILENAME = ".normalized_state.json"
 # per-track state fingerprint: change any of them and tracks re-encode
 # (provided the re-encode would not destroy their dynamic range, see
 # linear_feasible).
-DEFAULT_TARGET_LUFS = -10.0
+DEFAULT_TARGET_LUFS = -11.0
 DEFAULT_TRUE_PEAK = -1.0
 DEFAULT_LRA = 7.0
 DEFAULT_TOLERANCE = 0.5
