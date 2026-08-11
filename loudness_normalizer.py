@@ -209,7 +209,7 @@ def normalize_with_ffmpeg(track: Path, params: Params) -> tuple:
         if output_i and abs(float(output_i.group(1)) - params.target_lufs) > params.tolerance:
             stat_info["note"] = (
                 f"output integrated {output_i.group(1)} LUFS "
-                f"(target {params.target_lufs} LUFS, tolerance ±{params.tolerance})"
+                f"(target {params.target_lufs} LUFS, tolerance ±{params.tolerance} LUFS)"
             )
             return "off_target", track, stat_info
 
@@ -278,7 +278,7 @@ def main():
     workers = max(1, (os.cpu_count() or 1) - 1)
     print(f"Directory : {root}\nTracks    : {len(tracks)}\nWorkers   : {workers}\n"
           f"Target    : {params.target_lufs} LUFS / {params.true_peak} dBTP / "
-          f"LRA {params.lra} LU / ±{params.tolerance}\n")
+          f"LRA {params.lra} LU / tolerance ±{params.tolerance} LUFS\n")
 
     completed, normalized, skipped, off_target, errors = 0, 0, 0, 0, 0
 
