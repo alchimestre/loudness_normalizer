@@ -23,10 +23,7 @@ FORMATS = {
 MUTAGEN_EXTS = {".aiff", ".aif", ".mp3", ".m4a", ".flac"}
 STATE_FILENAME = ".normalized_state.json"
 
-# Defaults - every setting is a CLI option, and every setting is part of the
-# per-track state fingerprint: change any of them and tracks re-encode
-# (provided the re-encode would not destroy their dynamic range, see
-# linear_feasible).
+# Defaults. Every setting is a CLI option and part of the state fingerprint.
 DEFAULT_TARGET_LUFS = -11.0
 DEFAULT_TRUE_PEAK = -1.0
 DEFAULT_LRA = 7.0
@@ -36,8 +33,7 @@ PRINT_LOCK = threading.Lock()
 
 
 class Params:
-    """Normalization settings. as_dict() is the settings half of the
-    idempotency fingerprint."""
+    """Normalization settings. as_dict() feeds the idempotency fingerprint."""
 
     __slots__ = ("target_lufs", "true_peak", "lra", "tolerance")
 
@@ -93,11 +89,9 @@ def clone_metadata(src_path: Path, dest_path: Path, suffix: str):
 
 
 def needs_processing(cached, stat, params) -> bool:
-    """Idempotency fingerprint: a track needs processing iff it has no state
-    entry, its {mtime, size} differs from the recorded one, or the recorded
-    entry was produced under different settings than the current params.
-    Old entries (no settings keys) therefore become candidates on the first
-    run after this change - nothing is assumed to have been re-encoded."""
+    """A track needs processing iff its fingerprint changed: no state entry,
+    a different mtime/size, or different settings. Entries without settings
+    keys (legacy) therefore count as changed."""
     if not cached:
         return True
     if cached.get("mtime") != stat.st_mtime_ns or cached.get("size") != stat.st_size:
@@ -106,15 +100,11 @@ def needs_processing(cached, stat, params) -> bool:
 
 
 def linear_feasible(stats, params) -> bool:
-    """Mirror of ffmpeg's af_loudnorm.c init() linear-mode condition.
-
-    loudnorm normalizes in one of two ways:
-      - linear: constant gain, dynamics fully preserved
-      - dynamic: applies compression (destructive to dynamic range)
-    The filter picks linear iff the gain needed (target_i - input_i) keeps
-    the true peak under the target TP and the source LRA does not exceed the
-    target LRA; otherwise it silently falls back to dynamic. We refuse to
-    compress, so this gate decides whether a track is re-encoded at all."""
+    """Linear (pure-gain) normalization is possible iff the gain needed
+    (target_i - input_i) keeps true peak under the target TP and input LRA
+    does not exceed target LRA. Otherwise loudnorm would fall back to
+    dynamic mode (compression); we refuse to compress, so this gate decides
+    whether a track is re-encoded at all."""
     offset = params.target_lufs - float(stats["input_i"])
     offset_tp = float(stats["input_tp"]) + offset
     return offset_tp <= params.true_peak and float(stats["input_lra"]) <= params.lra
@@ -144,7 +134,7 @@ def normalize_with_ffmpeg(track: Path, params: Params) -> tuple:
         if not stats:
             return "error", track, "Could not parse loudnorm stats."
 
-        # Current file, untouched: used for skipped / off_target outcomes.
+        # Untouched file stat: used for skipped / off_target outcomes.
         stat_info = {"mtime": track.stat().st_mtime_ns, "size": track.stat().st_size, **params.as_dict()}
 
         if abs(float(stats["input_i"]) - params.target_lufs) <= params.tolerance:
@@ -186,10 +176,8 @@ def normalize_with_ffmpeg(track: Path, params: Params) -> tuple:
         if not temp_file.exists():
             return "error", track, "Output file not created."
 
-        # The gate above mirrors loudnorm's own linear condition, but the
-        # filter can still fall back to dynamic (e.g. measured LRA == 0 on
-        # constant-level material). Never let a destructive result replace
-        # the original: abort the write and keep the old file.
+        # loudnorm can still fall back to dynamic (e.g. measured LRA == 0).
+        # Never let a destructive result replace the original.
         mode = re.search(r"Normalization Type:\s*(\w+)", proc2.stderr)
         if mode is None or mode.group(1) != "Linear":
             temp_file.unlink()
