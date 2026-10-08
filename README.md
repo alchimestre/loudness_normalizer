@@ -5,19 +5,21 @@ loudness standard. It works with the formats that Pioneer CDJ and Rekordbox use.
 
 ## What it does
 
-- Makes every track the same loudness (-11 LUFS by default).
+- Makes every track the same loudness (-14 LUFS by default).
 - Works on many tracks at once. It uses one worker per CPU core, minus one.
 - Works only on tracks that changed. It saves each track's fingerprint in
   `.normalized_state.json`.
-- Keeps your tracks' dynamics. It never compresses audio. If a track cannot be
-  made louder without compression, the tool leaves it alone and tells you.
+- Keeps your tracks' dynamics. It never compresses audio. If the gain would
+  break the true peak ceiling, the tool leaves the track alone and tells you.
+  It also leaves tracks alone when FFmpeg cannot use its linear mode, including
+  unset measurements or a measured loudness range above its 50 LU maximum.
 - Keeps your metadata. Tags and cover art stay intact.
 - Writes to a temp file first. It replaces the original only when the new file
   is good.
 
 ## Terms
 
-- **LUFS** — loudness. Lower is quieter. -11 LUFS is a good level for club music.
+- **LUFS** — loudness. Lower is quieter. -14 LUFS is the level streaming services use.
 - **dBTP** — true peak. The loudest point of the sound, measured precisely.
 - **LRA** — loudness range. The difference between the quiet and loud parts of
   a track.
@@ -51,16 +53,15 @@ Examples:
 python loudness_normalizer.py "/Volumes/DJ_Drive/Techno_Set"
 
 # Normalize to a different loudness and true peak
-python loudness_normalizer.py --target-lufs -14 --true-peak -2.0 "/Volumes/DJ_Drive/Techno_Set"
+python loudness_normalizer.py --target-lufs -12 --true-peak -2.0 "/Volumes/DJ_Drive/Techno_Set"
 ```
 
 ## Options
 
 | Option | Default | What it does |
 |--------|---------|--------------|
-| `--target-lufs` | `-11` | Target loudness in LUFS. Range: -70 to -5. |
+| `--target-lufs` | `-14` | Target loudness in LUFS. Range: -70 to -5. |
 | `--true-peak` | `-1.0` | Highest true peak in dBTP. Range: -9 to 0. |
-| `--lra` | `7` | Target loudness range in LU. Tracks with a wider range are skipped, not compressed. Range: 1 to 50. |
 | `--tolerance` | `0.5` | How close a track must be to the target to count as done, in LUFS. |
 
 ## How it decides what to process

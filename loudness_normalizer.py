@@ -24,9 +24,8 @@ MUTAGEN_EXTS = {".aiff", ".aif", ".mp3", ".m4a", ".flac"}
 STATE_FILENAME = ".normalized_state.json"
 
 # Defaults. Every setting is a CLI option and part of the state fingerprint.
-DEFAULT_TARGET_LUFS = -11.0
+DEFAULT_TARGET_LUFS = -14.0
 DEFAULT_TRUE_PEAK = -1.0
-DEFAULT_LRA = 7.0
 DEFAULT_TOLERANCE = 0.5
 
 PRINT_LOCK = threading.Lock()
@@ -35,19 +34,17 @@ PRINT_LOCK = threading.Lock()
 class Params:
     """Normalization settings. as_dict() feeds the idempotency fingerprint."""
 
-    __slots__ = ("target_lufs", "true_peak", "lra", "tolerance")
+    __slots__ = ("target_lufs", "true_peak", "tolerance")
 
-    def __init__(self, target_lufs, true_peak, lra, tolerance):
+    def __init__(self, target_lufs, true_peak, tolerance):
         self.target_lufs = target_lufs
         self.true_peak = true_peak
-        self.lra = lra
         self.tolerance = tolerance
 
     def as_dict(self):
         return {
             "target_lufs": self.target_lufs,
             "true_peak": self.true_peak,
-            "lra": self.lra,
             "tolerance": self.tolerance,
         }
 
@@ -99,15 +96,31 @@ def needs_processing(cached, stat, params) -> bool:
     return any(cached.get(key) != value for key, value in params.as_dict().items())
 
 
-def linear_feasible(stats, params) -> bool:
-    """Linear (pure-gain) normalization is possible iff the gain needed
-    (target_i - input_i) keeps true peak under the target TP and input LRA
-    does not exceed target LRA. Otherwise loudnorm would fall back to
-    dynamic mode (compression); we refuse to compress, so this gate decides
-    whether a track is re-encoded at all."""
+def linear_feasible(stats, params) -> tuple:
+    """Check whether loudnorm can apply the required gain without compression.
+
+    Gain must keep the true peak at or under the ceiling. Loudness range is
+    limited only by loudnorm's maximum setting of 50 LU, not a target range.
+
+    The last check mirrors loudnorm's init(): when it trips, loudnorm treats
+    the measurements as unset, ignores them and runs in dynamic mode, which
+    compresses. The comparisons use the values as printed by the analysis
+    pass, because those exact strings are what the encoder receives.
+
+    Returns (ok, reason); reason is "" when ok."""
     offset = params.target_lufs - float(stats["input_i"])
     offset_tp = float(stats["input_tp"]) + offset
-    return offset_tp <= params.true_peak and float(stats["input_lra"]) <= params.lra
+    if float(stats["input_lra"]) > 50.0:
+        return False, ("loudness range exceeds loudnorm's maximum of 50 LU; "
+                       "it cannot normalize this track linearly")
+    if offset_tp > params.true_peak:
+        return False, (f"reaching {params.target_lufs} LUFS needs {offset:+.1f} dB, "
+                       f"which would put the true peak at {offset_tp:+.1f} dBTP "
+                       f"(ceiling {params.true_peak:+.1f} dBTP)")
+    if (float(stats["input_lra"]) == 0.0 or float(stats["input_i"]) == 0.0
+            or float(stats["input_tp"]) == 99.0 or float(stats["input_thresh"]) == -70.0):
+        return False, "loudnorm would ignore the measurements and run in dynamic mode"
+    return True, ""
 
 
 def normalize_with_ffmpeg(track: Path, params: Params) -> tuple:
@@ -140,15 +153,17 @@ def normalize_with_ffmpeg(track: Path, params: Params) -> tuple:
         if abs(float(stats["input_i"]) - params.target_lufs) <= params.tolerance:
             return "skipped", track, stat_info
 
-        if not linear_feasible(stats, params):
-            stat_info["note"] = (
-                f"skipped: normalizing to {params.target_lufs} LUFS would fall back to "
-                f"dynamic mode (destructive to dynamic range)"
-            )
+        feasible, reason = linear_feasible(stats, params)
+        if not feasible:
+            stat_info["note"] = f"skipped: {reason}"
             return "off_target", track, stat_info
 
+        # LRA=50 is the filter's maximum and is inert in linear mode, but
+        # loudnorm only takes the linear path when measured_LRA <= LRA, so the
+        # target LRA must not be passed here: it would force dynamic mode on
+        # every track with wider dynamics than the target.
         loudnorm_filter = (
-            f"loudnorm=I={params.target_lufs}:TP={params.true_peak}:LRA={params.lra}:"
+            f"loudnorm=I={params.target_lufs}:TP={params.true_peak}:LRA=50:"
             f"measured_I={stats['input_i']}:measured_LRA={stats['input_lra']}:"
             f"measured_TP={stats['input_tp']}:measured_thresh={stats['input_thresh']}:"
             f"offset={stats['target_offset']}:print_format=summary"
@@ -176,7 +191,7 @@ def normalize_with_ffmpeg(track: Path, params: Params) -> tuple:
         if not temp_file.exists():
             return "error", track, "Output file not created."
 
-        # loudnorm can still fall back to dynamic (e.g. measured LRA == 0).
+        # Keep the original if ffmpeg's linear-mode rules change.
         # Never let a destructive result replace the original.
         mode = re.search(r"Normalization Type:\s*(\w+)", proc2.stderr)
         if mode is None or mode.group(1) != "Linear":
@@ -216,10 +231,6 @@ def main():
                         help=f"Integrated loudness target in LUFS, EBU R128 (default {DEFAULT_TARGET_LUFS}).")
     parser.add_argument("--true-peak", type=float, default=DEFAULT_TRUE_PEAK,
                         help=f"Maximum true peak in dBTP (default {DEFAULT_TRUE_PEAK}).")
-    parser.add_argument("--lra", type=float, default=DEFAULT_LRA,
-                        help=f"Target loudness range in LU. Tracks with wider dynamics than this "
-                             f"cannot be normalized without compression and are skipped "
-                             f"(default {DEFAULT_LRA}).")
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE,
                         help=f"LUFS tolerance for 'already at target' (default {DEFAULT_TOLERANCE}).")
     args = parser.parse_args()
@@ -229,8 +240,6 @@ def main():
         parser.error(f"--target-lufs must be within [-70, -5] LUFS, got {args.target_lufs}")
     if not (-9 <= args.true_peak <= 0):
         parser.error(f"--true-peak must be within [-9, 0] dBTP, got {args.true_peak}")
-    if not (1 <= args.lra <= 50):
-        parser.error(f"--lra must be within [1, 50] LU, got {args.lra}")
     if args.tolerance <= 0:
         parser.error(f"--tolerance must be positive, got {args.tolerance}")
 
@@ -239,7 +248,7 @@ def main():
         print(f"{root} is not a directory.")
         return 1
 
-    params = Params(args.target_lufs, args.true_peak, args.lra, args.tolerance)
+    params = Params(args.target_lufs, args.true_peak, args.tolerance)
 
     state_path = root / STATE_FILENAME
     state = load_state(state_path)
@@ -266,7 +275,7 @@ def main():
     workers = max(1, (os.cpu_count() or 1) - 1)
     print(f"Directory : {root}\nTracks    : {len(tracks)}\nWorkers   : {workers}\n"
           f"Target    : {params.target_lufs} LUFS / {params.true_peak} dBTP / "
-          f"LRA {params.lra} LU / tolerance ±{params.tolerance} LUFS\n")
+          f"tolerance ±{params.tolerance} LUFS\n")
 
     completed, normalized, skipped, off_target, errors = 0, 0, 0, 0, 0
 
@@ -303,7 +312,8 @@ def main():
     save_state(state_path, valid)
 
     print(f"Finished. {normalized} normalized, {skipped} already at target (skipped), "
-          f"{off_target} left untouched (normalization would be destructive), {errors} error(s).")
+          f"{off_target} left untouched (see warnings), "
+          f"{errors} error(s).")
     return 0
 
 
