@@ -141,7 +141,9 @@ def normalize_with_ffmpeg(track: Path, params: Params) -> tuple:
         if proc.returncode != 0:
             return "error", track, f"Analysis failed:\n{proc.stderr}"
 
-        match = re.search(r'\{[\s\S]*?"target_offset"[\s\S]*?\}', proc.stderr)
+        # Anchor on "input_i" (the first key loudnorm prints) so braces inside
+        # metadata blobs in stderr, e.g. TRAKTOR4, cannot capture the match.
+        match = re.search(r'\{\s*"input_i"\s*:[\s\S]*?\}', proc.stderr)
         stats = json.loads(match.group(0)) if match else None
 
         if not stats:
