@@ -177,7 +177,10 @@ def normalize_with_ffmpeg(track: Path, params: Params) -> tuple:
         if "b" in fmt: codec_opts.extend(["-b:a", fmt["b"]])
         if "ar" in fmt: codec_opts.extend(["-ar", fmt["ar"]])
 
-        metadata_opts = ["-map_metadata", "-1"] if suffix in MUTAGEN_EXTS else ["-map_metadata", "0", "-map", "0:a"]
+        # Map audio only: containers that accept video (m4a) would otherwise
+        # pick up an embedded cover-art video stream and fail to encode it.
+        # Mutagen re-attaches cover art and tags after the encode.
+        metadata_opts = ["-map", "0:a", "-map_metadata", "-1"] if suffix in MUTAGEN_EXTS else ["-map_metadata", "0", "-map", "0:a"]
 
         encode_cmd = [
             "ffmpeg", "-threads", "1", "-filter_threads", "1",
