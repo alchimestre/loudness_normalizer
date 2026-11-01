@@ -79,3 +79,7 @@ re-checks every track.
 
 - Lossless (WAV, AIFF, FLAC): kept at 16-bit / 44.1 kHz.
 - Lossy (MP3, M4A): re-encoded at 320 kbps (MP3) or 256 kbps (AAC).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
